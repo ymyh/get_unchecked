@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use proc_macro::{TokenStream, TokenTree};
 use quote::{quote, ToTokens};
-use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_item_fn, fold_block}, parse_macro_input, parse_quote};
+use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, parse_quote};
 
 lazy_static::lazy_static! {
     static ref GROUP_PATTERN: regex::Regex = {
@@ -20,11 +20,14 @@ enum Next
 
 struct Args
 {
-    should_mut: i32,
-    has_ref: i32,
+    should_mut: bool,
+    has_ref: bool,
     exclude_set: HashSet<String>,
     mut_methods: Vec<String>,
     outer: bool,
+
+    has_ref_stack: Vec<bool>,
+    should_mut_stack: Vec<bool>,
 }
 
 impl Args
@@ -36,7 +39,6 @@ impl Args
 
         let mut next = Next::Ident;
         let mut property = String::new();
-        let mut punct = "=";
 
         for item in metadata
         {
@@ -48,7 +50,6 @@ impl Args
                     {
                         property = i.to_string();
                         next = Next::Punct;
-                        punct = "=";
                         continue;
                     }
                 }
@@ -57,9 +58,14 @@ impl Args
                 {
                     if next == Next::Punct
                     {
-                        if p.to_string() == punct
+                        if p.to_string() == "="
                         {
                             next = Next::Group;
+                            continue;
+                        }
+                        else if p.to_string() == ","
+                        {
+                            next = Next::Ident;
                             continue;
                         }
                     }
@@ -72,10 +78,11 @@ impl Args
                     {
                         if let Some(cap) = GROUP_PATTERN.captures(&g.to_string())
                         {
-                            let mut vaules = cap.get(0).unwrap().as_str();
-                            vaules = &vaules[1..vaules.len() - 1];
+                            let mut values = cap.get(0).unwrap().as_str();
+                            values = &values[1..values.len() - 1];
 
-                            let values = vaules.replace(" ", "");
+                            let values = values.replace(" ", "");
+
                             for v in values.split(",")
                             {
                                 match property.as_str()
@@ -99,7 +106,6 @@ impl Args
                                 }
                             }
                         }
-                        punct = ",";
                         next = Next::Punct;
 
                         continue;
@@ -114,11 +120,14 @@ impl Args
         }
 
         Args {
-            should_mut: 0,
-            has_ref: 0,
+            should_mut: false,
+            has_ref: false,
             exclude_set,
             mut_methods,
             outer: true,
+
+            has_ref_stack: Vec::new(),
+            should_mut_stack: Vec::new(),
         }
     }
 }
@@ -147,48 +156,82 @@ impl Fold for Args
         {
             Expr::Index(ref ei) =>
             {
+                if self.has_ref
+                {
+                    self.has_ref_stack.push(true);
+                    self.has_ref = false;
+                }
+                else
+                {
+                    self.has_ref_stack.push(false);
+                }
+
+                if self.should_mut
+                {
+                    self.should_mut = false;
+                    self.should_mut_stack.push(true);
+                }
+                else
+                {
+                    self.should_mut_stack.push(false);
+                }
+
                 let expr = ei.expr.clone();
                 let idx = ei.index.clone();
 
                 let name = expr.as_ref().to_token_stream().to_string();
                 let invoke_method: Expr;
 
+                let expr = self.fold_expr(*expr);
+                let idx = self.fold_expr(*idx);
+
+                let has_ref = self.has_ref_stack.pop().unwrap();
+                let should_mut = self.should_mut_stack.pop().unwrap();
+
                 if self.exclude_set.is_empty() || !self.exclude_set.contains(&name)
                 {
-                    let idx = self.fold_expr(*idx.clone());
-
-                    if self.should_mut != 0
+                    if should_mut
                     {
-                        self.should_mut -= 1;
+                        // self.should_mut = false;
                         invoke_method = parse_quote! { get_unchecked_mut };
                     }
                     else
                     {
-                        invoke_method = parse_quote! { get_unchecked }
+                        invoke_method = parse_quote! { get_unchecked };
                     }
 
                     if let Expr::Range(ref er) = idx
                     {
-                        // let mut from = parse_quote! {};
-                        // let mut to = parse_quote! {};
+                        let mut from: Option<Expr> = None;
+                        let mut to: Option<Expr> = None;
 
-                        // if let Some(f) = er.from.clone()
-                        // {
-                        //     from = self.fold_expr(*f);
-                        // }
+                        if let Some(f) = er.from.clone()
+                        {
+                            from = Some(fold_expr(self, *f));
+                        }
 
-                        // if let Some(t) = er.to.clone()
-                        // {
-                        //     to = self.fold_expr(*t);
-                        // }
+                        if let Some(t) = er.to.clone()
+                        {
+                            to = Some(fold_expr(self, *t));
+                        }
 
                         // If only arr[i..j] (not &(mut) arr[i..j]) then ignore it
-                        if self.has_ref == 0
+                        if !has_ref
                         {
                             return Expr::from(ei.clone());
                         }
 
-                        self.has_ref -= 1;
+                        let mut idx: Expr = parse_quote! {..};
+
+                        if let Some(f) = from
+                        {
+                            idx = parse_quote! { #f #idx };
+                        }
+
+                        if let Some(t) = to
+                        {
+                            idx = parse_quote! { #idx #t };
+                        }
 
                         return parse_quote! {
                             #expr.#invoke_method(#idx)
@@ -196,9 +239,9 @@ impl Fold for Args
                     }
                     else
                     {
-                        if self.has_ref != 0
+                        if has_ref
                         {
-                            self.has_ref -= 1;
+                            // self.has_ref = false;
 
                             return parse_quote! {
                                #expr.#invoke_method(#idx)
@@ -219,15 +262,13 @@ impl Fold for Args
                 if let Expr::Index(ei) = er.expr.as_ref()
                 {
                     let name = ei.expr.as_ref().to_token_stream().to_string();
-                    self.has_ref += 1;
+                    self.has_ref = true;
 
                     if self.exclude_set.is_empty() || !self.exclude_set.contains(&name)
                     {
                         if er.mutability.is_some()
                         {
-                            self.should_mut += 1;
-
-                            return self.fold_expr(er.expr.as_ref().clone());
+                            self.should_mut = true;
                         }
 
                         return self.fold_expr(er.expr.as_ref().clone());
@@ -239,21 +280,63 @@ impl Fold for Args
                 }
             }
 
+            Expr::Assign(ref ea) =>
+            {
+                if let Expr::Index(left) = *ea.left.clone()
+                {
+                    self.has_ref = false;
+                    self.should_mut = true;
+
+                    let left = self.fold_expr(Expr::from(left));
+                    let mut result = ea.clone();
+
+                    let right = self.fold_expr(Expr::from(*ea.right.clone()));
+
+                    result.left = Box::new(left);
+                    result.right = Box::new(right);
+
+                    return Expr::from(result);
+                }
+            }
+
+            Expr::AssignOp(ref eao) =>
+            {
+                if let Expr::Index(left) = *eao.left.clone()
+                {
+                    self.has_ref = false;
+                    self.should_mut = true;
+
+                    let left = self.fold_expr(Expr::from(left));
+                    let mut result = eao.clone();
+
+                    let right = self.fold_expr(Expr::from(*eao.right.clone()));
+
+                    result.left = Box::new(left);
+                    result.right = Box::new(right);
+
+                    return Expr::from(result);
+                }
+            }
+
             Expr::MethodCall(ref emc) =>
             {
                 if emc.method.to_string() == "unwrap"
                 {
                     if !self.exclude_set.contains(&emc.receiver.to_token_stream().to_string())
                     {
-                        self.fold_expr_method_call(emc.clone());
+                        let mut emc = emc.clone();
+                        emc.method = parse_quote! { unwrap_unchecked };
+
+                        return Expr::from(emc);
                     }
                 }
                 else if let Expr::Index(_) = *emc.receiver
                 {
-                    self.has_ref += 1;
+                    println!("method call after index");
+                    self.has_ref = true;
                     if self.mut_methods.contains(&emc.method.to_token_stream().to_string())
                     {
-                        self.should_mut += 1;
+                        self.should_mut = true;
                     }
                 }
             }
@@ -266,19 +349,11 @@ impl Fold for Args
 
         return fold_expr(self, i);
     }
-
-    fn fold_expr_method_call(&mut self, emc: syn::ExprMethodCall) -> syn::ExprMethodCall
-    {
-        let mut emc = emc.clone();
-        emc.method = parse_quote! { unwrap_unchecked };
-
-        return emc;
-    }
 }
 
 #[proc_macro_attribute]
 // #[cfg(not(debug_assertions))]
-pub fn unchecking(metadata: TokenStream, input: TokenStream) -> TokenStream
+pub fn unchecked(metadata: TokenStream, input: TokenStream) -> TokenStream
 {
     let input_fn = parse_macro_input!(input as ItemFn);
     let mut args = Args::new(metadata);
@@ -291,7 +366,7 @@ pub fn unchecking(metadata: TokenStream, input: TokenStream) -> TokenStream
 
 // #[proc_macro_attribute]
 // #[cfg(debug_assertions)]
-// pub fn unchecking(_metadata: TokenStream, input: TokenStream) -> TokenStream
+// pub fn unchecked(_metadata: TokenStream, input: TokenStream) -> TokenStream
 // {
 //     input
 // }
