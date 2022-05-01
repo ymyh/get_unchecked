@@ -3,43 +3,58 @@ A Rust library that you will never use it.
 
 ## Usage
 ```rust
-struct A(pub i32);
+struct A
+{
+    pub buf: [u8; 4096],
+}
 
 impl A
 {
-    pub fn add_one(&mut self)
+    pub fn new() -> Self
     {
-        self.0 += 1;
+        return Self { buf: [0; 4096] };
+    }
+
+    fn get_buf(&mut self) -> &mut [u8]
+    {
+        return &mut self.buf[..];
     }
 }
 
-#[get_unchecked(exclude = [sub2])]
+// exclude: full pattern before indexing
+// mut: name of method that you want to borrow &mut self
+#[unchecked(exclude = ["arr2", "a[0].buf"], mut = ["get_buf"])]
 fn main()
 {
-    let mut arr = vec![1, 2, 3, 4, 5, 6];
-    let sub = &mut arr[..3];
-    sub[3] += sub[4];
+    let mut arr = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let arr1 = &mut arr[0..3];
+    
 
-    assert_eq!(arr[3], 9);
+    arr1[3] = arr1[4] + 1;
+    arr1[3] += arr1[4] + 1;
 
-    let err = panic::catch_unwind(move ||
+    assert!(arr[3] == 12);  //can't convert inside marco, so use arr1[3] will panic
+
+    let arr2 = &arr[0..3];
+
+    let err = std::panic::catch_unwind(||
     {
-        let sub2 = &mut arr[..3];
-        sub2[3] += 1;
+        let _ = arr2[3];    //will panic
     });
 
     assert!(err.is_err());
 
-    let mut arr = vec![A(0), A(1), A(2)];
+    let mut a = [A::new()];
+    a[0].get_buf()[10] = 100;    //force use get_unchecked_mut() to call get_buf()
+    let num = a[0].get_buf()[10];
 
-    foo(&mut arr[..1]);
-    assert_eq!(arr[1].0, 2);
-}
+    assert!(num == 100);
 
-#[get_unchecked(mut = [add_one])]
-fn foo(arr: &mut [A])
-{
-    arr[1].add_one();
+    let num = Some(2);
+    let _ = num.unwrap(); // auto convert to unwrap_unchecked(), can ignore through unwrap_exclude like exclude
+
+    let _ = a[0].buf[0];  // buf[0] is excluded, but a[0] still
+    println!("end");
 }
 ```
 P.S. The macro active only in release mode

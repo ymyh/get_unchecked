@@ -6,7 +6,7 @@ use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, 
 
 lazy_static::lazy_static! {
     static ref GROUP_PATTERN: regex::Regex = {
-        regex::Regex::new(r###"\[[^~`!@#$%^&*()\-+=/*{}\[\];:'"<.?]+?\]"###).unwrap()
+        regex::Regex::new(r###"\[("(.\s?)+",?)*\]"###).unwrap()
     };
 }
 
@@ -85,21 +85,23 @@ impl Args
 
                             for v in values.split(",")
                             {
+                                let prop = &v[1..v.len() - 1];
+
                                 match property.as_str()
                                 {
                                     "exclude" =>
                                     {
-                                        exclude_set.insert(v.to_string());
+                                        exclude_set.insert(prop.to_string());
                                     }
 
                                     "mut" =>
                                     {
-                                        mut_methods.push(v.to_string());
+                                        mut_methods.push(prop.to_string());
                                     }
 
                                     "unwrap_exclude" =>
                                     {
-                                        exclude_set.insert(v.to_string());
+                                        exclude_set.insert(prop.to_string());
                                     }
 
                                     _ => {}
@@ -179,7 +181,7 @@ impl Fold for Args
                 let expr = ei.expr.clone();
                 let idx = ei.index.clone();
 
-                let name = expr.as_ref().to_token_stream().to_string();
+                let name = expr.as_ref().to_token_stream().to_string().replace(" ", "");
                 let invoke_method: Expr;
 
                 let expr = self.fold_expr(*expr);
@@ -192,7 +194,6 @@ impl Fold for Args
                 {
                     if should_mut
                     {
-                        // self.should_mut = false;
                         invoke_method = parse_quote! { get_unchecked_mut };
                     }
                     else
@@ -241,20 +242,16 @@ impl Fold for Args
                     {
                         if has_ref
                         {
-                            // self.has_ref = false;
-
                             return parse_quote! {
                                #expr.#invoke_method(#idx)
                             };
                         }
 
                         return parse_quote! {
-                            *#expr.#invoke_method(#idx)
+                            (*#expr.#invoke_method(#idx))
                         };
                     }
                 }
-
-                return i;
             }
 
             Expr::Reference(ref er) =>
@@ -332,7 +329,6 @@ impl Fold for Args
                 }
                 else if let Expr::Index(_) = *emc.receiver
                 {
-                    println!("method call after index");
                     self.has_ref = true;
                     if self.mut_methods.contains(&emc.method.to_token_stream().to_string())
                     {
@@ -352,21 +348,20 @@ impl Fold for Args
 }
 
 #[proc_macro_attribute]
-// #[cfg(not(debug_assertions))]
+#[cfg(not(debug_assertions))]
 pub fn unchecked(metadata: TokenStream, input: TokenStream) -> TokenStream
 {
     let input_fn = parse_macro_input!(input as ItemFn);
     let mut args = Args::new(metadata);
 
     let output = args.fold_item_fn(input_fn);
-    println!("{}", output.to_token_stream().to_string());
 
     TokenStream::from(quote!{ #output })
 }
 
-// #[proc_macro_attribute]
-// #[cfg(debug_assertions)]
-// pub fn unchecked(_metadata: TokenStream, input: TokenStream) -> TokenStream
-// {
-//     input
-// }
+#[proc_macro_attribute]
+#[cfg(debug_assertions)]
+pub fn unchecked(_metadata: TokenStream, input: TokenStream) -> TokenStream
+{
+    input
+}
