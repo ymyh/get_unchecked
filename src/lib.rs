@@ -4,12 +4,6 @@ use proc_macro::{TokenStream, TokenTree};
 use quote::{quote, ToTokens};
 use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, parse_quote};
 
-lazy_static::lazy_static! {
-    static ref GROUP_PATTERN: regex::Regex = {
-        regex::Regex::new(r###"\[("(.\s?)+",?)*\]"###).unwrap()
-    };
-}
-
 #[derive(PartialEq)]
 enum Next
 {
@@ -34,6 +28,8 @@ impl Args
 {
     pub fn new(metadata: TokenStream) -> Self
     {
+        let pattern = regex::Regex::new(r###"\[("(.\s?)+",?)*\]"###).unwrap();
+
         let mut exclude_set = HashSet::new();
         let mut mut_methods = Vec::new();
 
@@ -76,7 +72,7 @@ impl Args
                 {
                     if next == Next::Group
                     {
-                        if let Some(cap) = GROUP_PATTERN.captures(&g.to_string())
+                        if let Some(cap) = pattern.captures(&g.to_string())
                         {
                             let mut values = cap.get(0).unwrap().as_str();
                             values = &values[1..values.len() - 1];
