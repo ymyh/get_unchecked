@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use proc_macro::{TokenStream, TokenTree};
+use proc_macro_error::abort;
 use quote::{quote, ToTokens};
 use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, parse_quote};
 
@@ -28,8 +29,6 @@ impl Args
 {
     pub fn new(metadata: TokenStream) -> Self
     {
-        let pattern = regex::Regex::new(r###"\[("(.\s?)+",?)*\]"###).unwrap();
-
         let mut exclude_set = HashSet::new();
         let mut mut_methods = Vec::new();
 
@@ -72,39 +71,48 @@ impl Args
                 {
                     if next == Next::Group
                     {
-                        if let Some(cap) = pattern.captures(&g.to_string())
+                        next = Next::Punct;
+
+                        let group = g.to_string().replace(" ", "");
+
+                        if group.starts_with("[") && group.ends_with("]")
                         {
-                            let mut values = cap.get(0).unwrap().as_str();
-                            values = &values[1..values.len() - 1];
-
-                            let values = values.replace(" ", "");
-
-                            for v in values.split(",")
+                            for value in group[1..group.len() - 1].split(",")
                             {
-                                let prop = &v[1..v.len() - 1];
-
-                                match property.as_str()
+                                if value.starts_with("\"") && value.ends_with("\"")
                                 {
-                                    "exclude" =>
-                                    {
-                                        exclude_set.insert(prop.to_string());
-                                    }
+                                    let v = &value[1..value.len() - 1];
 
-                                    "mut" =>
+                                    match property.as_str()
                                     {
-                                        mut_methods.push(prop.to_string());
-                                    }
+                                        "exclude" =>
+                                        {
+                                            exclude_set.insert(v.to_string());
+                                        }
 
-                                    "unwrap_exclude" =>
-                                    {
-                                        exclude_set.insert(prop.to_string());
-                                    }
+                                        "mut" =>
+                                        {
+                                            mut_methods.push(v.to_string());
+                                        }
 
-                                    _ => {}
+                                        "unwrap_exclude" =>
+                                        {
+                                            exclude_set.insert(v.to_string());
+                                        }
+
+                                        _ =>
+                                        {
+                                            abort!("Unknown property \"{}\", available properties are 
+                                            \"exclude\", \"mut\" and \"unwrap_exclude\"", property)
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    abort!("Value must be a string literal{}", "");
                                 }
                             }
                         }
-                        next = Next::Punct;
 
                         continue;
                     }
@@ -344,11 +352,16 @@ impl Fold for Args
 }
 
 #[proc_macro_attribute]
+#[proc_macro_error::proc_macro_error]
 #[cfg(not(debug_assertions))]
 pub fn unchecked(metadata: TokenStream, input: TokenStream) -> TokenStream
 {
+    use proc_macro_error::abort_if_dirty;
+
     let input_fn = parse_macro_input!(input as ItemFn);
     let mut args = Args::new(metadata);
+
+    abort_if_dirty();
 
     let output = args.fold_item_fn(input_fn);
 
