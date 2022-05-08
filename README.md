@@ -51,7 +51,7 @@ fn main()
     assert!(num == 100);
 
     let num = Some(2);
-    let _ = num.unwrap(); // auto convert to unwrap_unchecked(), can ignore through unwrap_exclude like exclude
+    let _ = num.unwrap(); // convert to unwrap_unchecked() if you enable the "unwrap" feature, can ignore through unwrap_exclude like exclude
 
     let _ = a[0].buf[0];  // buf[0] is excluded, but a[0] still
     println!("end");

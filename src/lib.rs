@@ -321,17 +321,21 @@ impl Fold for Args
 
             Expr::MethodCall(ref emc) =>
             {
-                if emc.method.to_string() == "unwrap"
+                if cfg!(feature = "unwrap")
                 {
-                    if !self.exclude_set.contains(&emc.receiver.to_token_stream().to_string())
+                    if emc.method.to_string() == "unwrap"
                     {
-                        let mut emc = emc.clone();
-                        emc.method = parse_quote! { unwrap_unchecked };
+                        if !self.exclude_set.contains(&emc.receiver.to_token_stream().to_string())
+                        {
+                            let mut emc = emc.clone();
+                            emc.method = parse_quote! { unwrap_unchecked };
 
-                        return Expr::from(emc);
+                            return Expr::from(emc);
+                        }
                     }
                 }
-                else if let Expr::Index(_) = *emc.receiver
+               
+                if let Expr::Index(_) = *emc.receiver
                 {
                     self.has_ref = true;
                     if self.mut_methods.contains(&emc.method.to_token_stream().to_string())
