@@ -18,7 +18,7 @@ struct Args
     should_mut: bool,
     has_ref: bool,
     exclude_set: HashSet<String>,
-    mut_methods: Vec<String>,
+    mut_access: Vec<String>,
     outer: bool,
 
     has_ref_stack: Vec<bool>,
@@ -30,7 +30,7 @@ impl Args
     pub fn new(metadata: TokenStream) -> Self
     {
         let mut exclude_set = HashSet::new();
-        let mut mut_methods = Vec::new();
+        let mut mut_access = Vec::new();
 
         let mut next = Next::Ident;
         let mut property = String::new();
@@ -92,7 +92,7 @@ impl Args
 
                                         "mut" =>
                                         {
-                                            mut_methods.push(v.to_string());
+                                            mut_access.push(v.to_string());
                                         }
 
                                         "unwrap_exclude" =>
@@ -129,7 +129,7 @@ impl Args
             should_mut: false,
             has_ref: false,
             exclude_set,
-            mut_methods,
+            mut_access,
             outer: true,
 
             has_ref_stack: Vec::new(),
@@ -338,7 +338,21 @@ impl Fold for Args
                 if let Expr::Index(_) = *emc.receiver
                 {
                     self.has_ref = true;
-                    if self.mut_methods.contains(&emc.method.to_token_stream().to_string())
+
+                    if self.mut_access.contains(&emc.method.to_token_stream().to_string())
+                    {
+                        self.should_mut = true;
+                    }
+                }
+            }
+
+            Expr::Field(ref ef) =>
+            {
+                if let Expr::Index(_) = *ef.base
+                {
+                    self.has_ref = true;
+
+                    if self.mut_access.contains(&ef.member.to_token_stream().to_string())
                     {
                         self.should_mut = true;
                     }
