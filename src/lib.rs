@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use proc_macro::{TokenStream, TokenTree};
 use proc_macro_error::abort;
 use quote::{quote, ToTokens};
-use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, parse_quote};
+use syn::{Expr, ItemFn, fold::{Fold, fold_expr, fold_block}, parse_macro_input, parse_quote, punctuated::Punctuated, token::Comma};
 
 #[derive(PartialEq)]
 enum Next
@@ -18,7 +18,7 @@ struct Args
     should_mut: bool,
     has_ref: bool,
     exclude_set: HashSet<String>,
-    mut_methods: Vec<String>,
+    mut_access: Vec<String>,
     outer: bool,
 
     has_ref_stack: Vec<bool>,
@@ -129,7 +129,7 @@ impl Args
             should_mut: false,
             has_ref: false,
             exclude_set,
-            mut_methods,
+            mut_access: mut_methods,
             outer: true,
 
             has_ref_stack: Vec::new(),
@@ -190,6 +190,11 @@ impl Fold for Args
 
                 let expr = self.fold_expr(*expr);
                 let idx = self.fold_expr(*idx);
+
+                if name == "adj"
+                {
+                    println!("{}", ei.to_token_stream().to_string());
+                }
 
                 let has_ref = self.has_ref_stack.pop().unwrap();
                 let should_mut = self.should_mut_stack.pop().unwrap();
@@ -298,6 +303,36 @@ impl Fold for Args
 
                     return Expr::from(result);
                 }
+
+                if let Expr::Tuple(et) = *ea.left.clone()
+                {
+                    let mut new_elems = Punctuated::<Expr, Comma>::new();
+
+                    let mut i = 0;
+                    for elem in et.elems.clone()
+                    {
+                        self.should_mut = true;
+                        let new_elem = self.fold_expr(elem);
+                        println!("{}", new_elem.to_token_stream().to_string());
+                        
+                        new_elems.insert(i, new_elem);
+                        i += 1;
+                    }
+
+                    let right = self.fold_expr(Expr::from(*ea.right.clone()));
+                    let mut left = et.clone();
+
+                    left.elems = new_elems;
+
+                    let mut result = ea.clone();
+                    
+                    result.left = Box::new(Expr::from(left));
+                    result.right = Box::new(right);
+
+                    println!("{}", result.to_token_stream().to_string());
+
+                    return Expr::from(result);
+                }
             }
 
             Expr::AssignOp(ref eao) =>
@@ -334,7 +369,19 @@ impl Fold for Args
                 else if let Expr::Index(_) = *emc.receiver
                 {
                     self.has_ref = true;
-                    if self.mut_methods.contains(&emc.method.to_token_stream().to_string())
+                    if self.mut_access.contains(&emc.method.to_token_stream().to_string())
+                    {
+                        self.should_mut = true;
+                    }
+                }
+            }
+
+            Expr::Field(ref ef) =>
+            {
+                if let Expr::Index(_) = *ef.base
+                {
+                    self.has_ref = true;
+                    if self.mut_access.contains(&ef.member.to_token_stream().to_string())
                     {
                         self.should_mut = true;
                     }
