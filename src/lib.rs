@@ -30,7 +30,7 @@ impl Args
     pub fn new(metadata: TokenStream) -> Self
     {
         let mut exclude_set = HashSet::new();
-        let mut mut_methods = Vec::new();
+        let mut mut_access = Vec::new();
 
         let mut next = Next::Ident;
         let mut property = String::new();
@@ -92,7 +92,7 @@ impl Args
 
                                         "mut" =>
                                         {
-                                            mut_methods.push(v.to_string());
+                                            mut_access.push(v.to_string());
                                         }
 
                                         "unwrap_exclude" =>
@@ -129,7 +129,7 @@ impl Args
             should_mut: false,
             has_ref: false,
             exclude_set,
-            mut_access: mut_methods,
+            mut_access,
             outer: true,
 
             has_ref_stack: Vec::new(),
@@ -356,19 +356,24 @@ impl Fold for Args
 
             Expr::MethodCall(ref emc) =>
             {
-                if emc.method.to_string() == "unwrap"
+                if cfg!(feature = "unwrap")
                 {
-                    if !self.exclude_set.contains(&emc.receiver.to_token_stream().to_string())
+                    if emc.method.to_string() == "unwrap"
                     {
-                        let mut emc = emc.clone();
-                        emc.method = parse_quote! { unwrap_unchecked };
+                        if !self.exclude_set.contains(&emc.receiver.to_token_stream().to_string())
+                        {
+                            let mut emc = emc.clone();
+                            emc.method = parse_quote! { unwrap_unchecked };
 
-                        return Expr::from(emc);
+                            return Expr::from(emc);
+                        }
                     }
                 }
-                else if let Expr::Index(_) = *emc.receiver
+               
+                if let Expr::Index(_) = *emc.receiver
                 {
                     self.has_ref = true;
+
                     if self.mut_access.contains(&emc.method.to_token_stream().to_string())
                     {
                         self.should_mut = true;
@@ -381,6 +386,7 @@ impl Fold for Args
                 if let Expr::Index(_) = *ef.base
                 {
                     self.has_ref = true;
+
                     if self.mut_access.contains(&ef.member.to_token_stream().to_string())
                     {
                         self.should_mut = true;
